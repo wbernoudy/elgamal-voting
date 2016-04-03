@@ -5,7 +5,7 @@
 # voters need to trust, voters trust only themselves. Votes can only be
 # tallied if every voter participates.
 # Uses the zero knowledge proofs from this paper: 
-# http://citeseerx.ist.psu.edu/viewdoc/download;jsessionid=5306CE6258AA996EA0E25712F4F6A99B?doi=10.1.1.5.2836&rep=rep1&type=pdf
+# http://www.win.tue.nl/~berry/papers/euro97.pdf
 
 
 from functools import reduce
