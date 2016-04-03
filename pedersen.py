@@ -62,9 +62,12 @@ def elgamal_encrypt(message, public_key, g, q):
 
 
 
-class Player:
-    def __init__(self, n, party_id): # TODO: deal with q and g and p
+class Pedersen:
+    def __init__(self, p, g, n, party_id): # TODO: deal with q and g and p
         assert 0 <= party_id < n, "ID must be less than n."
+        self.p = p
+        self.q = (p-1)//2
+        self.g = g
         self.n = n
         self.party_id = party_id
         self.global_shares = {}
@@ -105,7 +108,7 @@ class Player:
         
         # We now have every commit
         m = prod(self.public_key_shares.values())
-        self.public_key = (m * self.public_key_share) % p
+        self.public_key = (m * self.public_key_share) % self.p
 
     
     def log_ZKP_prove_step1(self, ciphertext):
@@ -120,17 +123,17 @@ class Player:
         # We now need to prove that log_g(self.public_key_share) == log_x(w)
         # or, in other words, we haven't changed our secret when calculating w
         # This is done using the zero knowledge proof from Pedersen
-        r = randint(q)
+        r = randint(self.q)
         self.random_w = r
-        a = pow(g, r, p) # TODO: are these mod q?
-        b = pow(x, r, p)
+        a = pow(self.g, r, self.p) # TODO: are these mod q?
+        b = pow(x, r, self.p)
         self.a = a # these are unnecessary to keep
         self.b = b
 
         return [w, a, b] # now anyone should be able to verify that w is #legit
 
     def log_ZKP_verify_step2_receive(self, p_id, proof):
-        proof.append(randint(q)) # the c value
+        proof.append(randint(self.q)) # the c value
         self.proofs[p_id] = proof
 
     def log_ZKP_verify_step2_send(self):
@@ -165,8 +168,8 @@ class Player:
                 b = self.proofs[p_id][2]
                 y = self.proofs[p_id][0]
 
-                test1 = (pow(g, r, p) == (a*pow(x, c, p)) % p)
-                test2 = (pow(h, r, p) == (b*pow(y, c, p)) % p)
+                test1 = (pow(self.g, r, self.p) == (a*pow(x, c, self.p)) % self.p)
+                test2 = (pow(h, r, self.p) == (b*pow(y, c, self.p)) % self.p)
 
                 if not (test1 and test2):
                     print(test1, test2)
@@ -177,35 +180,145 @@ class Player:
 
         self.abort = abort
 
-    def log_ZKP_self_test(self):
-        h = self.ciphertext[0] # the x from the ciphertext
-        x = self.public_key_share
-        y = pow(h, self.secret, p)
-
-        w = randint(q)
-        (a, b) = (pow(g, w, p), pow(h, w, p))
-
-        c = randint(q)
-
-        r = w + self.secret*c
-
-        assert pow(g, r, p) == (a*pow(x, c, p))%p, "Self test1 failed."
-        assert pow(h, r, p) == (b*pow(y, c, p))%p, "Self test2 failed."
-        print("Tests passed.")
-
     def decrypt(self):
-        #assert not self.abort, "ZKPs were not completed successfully. Decrypt is dangerous."
+        assert not self.abort, "ZKPs were not completed successfully. Decrypt is dangerous."
         #print(self.proofs)
 
         w = map(lambda x: x[0], self.proofs.values())
         P = prod(w) * self.w
-        message = mod_div(self.ciphertext[1], P, p) # TODO: check q
+        message = mod_div(self.ciphertext[1], P, self.p) # TODO: check q
 
         return message
 
 
-num_players = 10
-players = [Player(num_players, x) for x in range(num_players)]
+commits = {}
+def publish_vote(p_id, step, commit):
+    if step == 0:
+        commits[p_id] = [commit]
+    else:
+        assert p_id in commits, "Voter is trying to commit second step before step 1."
+        assert len(commits[p_id]) == 2, "Voter didn't use a published c value."
+
+        commits[p_id].append(commit)
+
+def beacon(p_id, q):
+    assert len(commits[p_id]) == 1, "Voter hasn't published commit0 yet."
+    r = randint(q)
+    commits[p_id].append(r)
+    return r
+
+def get_commit(p_id):
+    if len(commits[p_id]) == 3:
+        return commits[p_id]
+    else:
+        return None
+    
+
+
+
+
+class Voter(Pedersen):
+    def __init__(self, p, g, n, voter_id, candidates = 2):
+        super(Voter, self).__init__(p, g, n, voter_id)
+        self.voter_id = voter_id
+        self.candidates = candidates
+        
+        # these are defined such that the final decrypted value will be g^x
+        # where x is the total # of yes's - no's
+        self.yes = self.g
+        self.no = pow(self.g, p-2, p) # multiplicative inverse of g, g^-1
+
+    def get_vote(self, vote):
+        assert 0 <= vote < self.candidates, "Not a valid vote."
+        self.vote = vote
+    
+    def encrypt_vote(self):
+        #v = []
+
+        # temporary, simplified method
+        v = self.no
+        if self.vote:
+            v = self.yes
+
+        self.v = v
+
+        encrypted_vote = elgamal_encrypt(v, self.public_key, self.g, self.q)
+        self.encrypted_vote = encrypted_vote
+        return encrypted_vote
+
+    def prove(self):
+        (alpha, w, r1, d1) = (randint(self.q) for x in range(4))
+
+        # these are just for making it cleaner
+        p = self.p
+        q = self.q
+        h = self.public_key
+        v = self.v
+
+        x = pow(g, alpha, p)
+        y = (pow(h, alpha, p)*v) % p
+        a1 = (pow(g, r1, p)*pow(x, d1, p)) % p
+        b1 = (pow(h, r1, p)*pow((y*v)%p, d1, p)) % p
+        a2 = pow(g, w, p)
+        b2 = pow(h, w, p)
+        if self.vote:
+            commit0 = (x, y, a1, b1, a2, b2)
+        else:
+            commit0 = (x, y, a2, b2, a1, b1)
+
+        publish_vote(self.party_id, 0, commit0) # 0 is the first step
+        # done with the first part
+
+        # this represents getting the random value from the verifier
+        c = beacon(self.party_id, self.q)
+
+        d2 = (c - d1) % q # TODO: figure out how to deal with negatives
+        r2 = (w - alpha*d2) % q
+        if self.vote:
+            commit1 = (d1, d2, r1, r2)
+        else:
+            commit1 = (d2, d1, r2, r1)
+
+        publish_vote(self.party_id, 1, commit1)
+        # done with the protocol
+
+    def verify_vote(self, p_id):
+        commit = get_commit(p_id)
+        if commit is None:
+            print("Voter hasn't published full proof yet.")
+            return
+
+        g = self.yes
+        g_i = self.no # stands for multiplicative inverse of g
+        p = self.p
+        g = self.g
+        h = self.public_key
+
+        (x, y, a1, b1, a2, b2) = commit[0]
+        c = commit[1]
+        (d1, d2, r1, r2) = commit[2]
+
+        test1 = (c == (d1 + d2) % q) # TODO: is mod p necessary?
+        test2 = (a1 == (pow(g, r1, p)*pow(x, d1, p)) % p)
+        test3 = (b1 == (pow(h, r1, p)*pow((y*g)%p, d1, p)) % p)
+        test4 = (a2 == (pow(g, r2, p)*pow(x, d2, p)) % p)
+        test5 = (b2 == (pow(h, r2, p)*pow((y*g_i)%p, d2, p)) % p)
+
+        if not (test1 and test2 and test3 and test4 and test5):
+            print(test1, test2, test3, test4, test5)
+            print(p_id, "failed their verification! Someone's cheating! Abort!!")
+        else:
+            print(self.party_id, "passed", p_id, "on voting verification.")
+
+        
+        
+
+
+
+"""Testing Pederson public generation, zero knowledge proofs, and decryption"""
+
+num_players = 3
+players = [Voter(p, g, num_players, x) for x in range(num_players)]
 
 for player in players:
     s = player.publish_shares()
@@ -253,3 +366,32 @@ thingy = pow(g, my_message, p)
 for player in players:
     player.log_ZKP_verify_step4_verify()
     assert thingy == player.decrypt()
+
+
+
+
+
+
+# testing the voting
+v0 = players[0]
+v1 = players[1]
+v2 = players[2]
+
+v0.get_vote(0)
+v1.get_vote(1)
+v2.get_vote(0)
+
+v0.encrypt_vote()
+v1.encrypt_vote()
+v2.encrypt_vote()
+
+v0.prove()
+v1.prove()
+v2.prove()
+
+v0.verify_vote(1)
+v0.verify_vote(2)
+v1.verify_vote(0)
+v1.verify_vote(2)
+v2.verify_vote(0)
+v2.verify_vote(1)
