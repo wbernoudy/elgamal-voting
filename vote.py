@@ -1,3 +1,13 @@
+# This script is for doing secure voting.
+# It uses the ElGamal homomorphic encryption scheme for encrypting
+# and tallying the votes. It uses the Pedersen protocol for key
+# generation. Instead of having a smaller number of authorities that
+# voters need to trust, voters trust only themselves. Votes can only be
+# tallied if every voter participates.
+# Uses the zero knowledge proofs from this paper: 
+# http://citeseerx.ist.psu.edu/viewdoc/download;jsessionid=5306CE6258AA996EA0E25712F4F6A99B?doi=10.1.1.5.2836&rep=rep1&type=pdf
+
+
 from functools import reduce
 from operator import and_
 from fractions import gcd as fractions_gcd
@@ -219,8 +229,9 @@ class Pedersen:
 
         if not (test1 and test2):
             print(test1, test2)
-            print(self.party_id, "could not verify", p_id)
+            print(self.party_id, "could not log ZKP verify", p_id)
         else:
+            print(self.party_id, "passed", p_id, "on log ZKP verification.")
             self.pedersen_commits_verified[p_id] = True
             self.global_decrypt_shares[p_id] = y
 
@@ -404,16 +415,10 @@ for vt in voters:
 pk = voters[0].public_key
 s = sum(vt.secret for vt in voters) % q
 for vt in voters:
-    if pk != vt.public_key:
-        print("Differing public_key")
-    #assert pk == vt.public_key, "Differing public keys"
+    assert pk == vt.public_key, "Differing public keys"
 
-#assert pk == prod(vt.public_key_share for vt in voters) % p
-if pk != prod(vt.public_key_share for vt in voters) % p:
-    print("didn't produce public key correctly")
-#assert pk == pow(g, s, p) % p
-if pk != pow(g, s, p):
-    print("Bad key pair")
+assert pk == prod(vt.public_key_share for vt in voters) % p
+assert pk == pow(g, s, p) % p
 
 for vt in voters:
     vt.set_vote(votes[vt.voter_id])
@@ -433,9 +438,10 @@ for vt in voters:
 
 out = outs[0]
 for o in outs:
-    #assert o == out, "Decryption resulted in different values"
+    assert o == out, "Decryption resulted in different values"
     pass
 
-#assert out == mod_div(1, g**3, p), "Bad out"
+assert out == mod_div(1, g**3, p), "Bad out"
+print("Success!")
 
 
