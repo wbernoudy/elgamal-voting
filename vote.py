@@ -265,33 +265,38 @@ def get_voter_commit(p_id):
         return None
 
 class Voter(Pedersen):
-    def __init__(self, p, g, n, voter_id, candidates = 2):
+    def __init__(self, p, g, n, voter_id, options):
         super(Voter, self).__init__(p, g, n, voter_id)
         self.voter_id = voter_id
-        self.candidates = candidates
+        self.options = options
+        self.num_votes = len(options)
         self.votes_verified = {p_id: False for p_id in range(n) if p_id != voter_id}
         self.global_votes = {}
         
         # these are defined such that the final decrypted value will be g^x
         # where x is the total # of yes's - no's
-        self.yes = self.g
-        self.no = pow(self.g, p-2, p) # multiplicative inverse of g, g^-1
+        #self.yes = self.g
+        #self.no = pow(self.g, p-2, p) # multiplicative inverse of g, g^-1
 
     def set_vote(self, vote):
-        assert 0 <= vote < self.candidates, "Not a valid vote."
+        for i, v in enumerate(vote):
+            assert 0 <= v < self.options[i], "Not a valid vote."
+
         self.vote = vote
     
     def encrypt_and_prove(self):
+        self.encrypted_vote = []
         #v = []
 
         # temporary, simplified method
-        v = self.no
-        if self.vote:
-            v = self.yes
+        #v = self.no
+        #if self.vote:
+        #    v = self.yes
 
-        self.v = v
+        #self.v = v
 
-        (alpha, w, r1, d1) = (randint(self.q) for x in range(4))
+        #(alpha, w, r1, d1) = (randint(self.q) for x in range(4))
+
 
         # these are just for making it cleaner
         p = self.p
@@ -299,18 +304,50 @@ class Voter(Pedersen):
         h = self.public_key
         #v = self.v
 
+        
+        alpha = randint(q) # this alpha value is our secret key
+
+        # (w, r, d)
+        #randoms = tuple(tuple(randint(q) for x in range(3)) for y in range(self.options[option])) # TODO: more than one vote
+
+        o = self.options[0] # TODO: make o interate across all options
+        v = self.vote[0]
+        G = self.generators[self.vote[option]]
+
+
+        w = tuple(randint(q) for x in range(o))
+        d = [randint(q) for x in range(o)] # this is still mildy ineffecient
+        r_v = randint(q)
+
         x = pow(g, alpha, p)
         y = (pow(h, alpha, p)*v) % p
         #(x, y) = self.encrypted_vote
-        self.encrypted_vote = (x, y) # this is our own encrypted vote
-        a1 = (pow(g, r1, p)*pow(x, d1, p)) % p
-        b1 = (pow(h, r1, p)*pow((y*v)%p, d1, p)) % p
-        a2 = pow(g, w, p)
-        b2 = pow(h, w, p)
-        if self.vote:
-            commit0 = (x, y, a1, b1, a2, b2)
-        else:
-            commit0 = (x, y, a2, b2, a1, b1)
+        self.encrypted_vote.append((x, y)) # this is our own encrypted vote
+
+        
+        #a1 = (pow(g, r1, p)*pow(x, d1, p)) % p
+        #b1 = (pow(h, r1, p)*pow((y*v)%p, d1, p)) % p
+        #a2 = pow(g, w, p)
+        #b2 = pow(h, w, p)
+        #if self.vote:
+        #    commit0 = (x, y, a1, b1, a2, b2)
+        #else:
+        #    commit0 = (x, y, a2, b2, a1, b1)
+
+        a = []
+        b = []
+        
+        for i in range(o):
+            if i == v:
+                a.append((pow(g, r_v, p)*pow(x, d[v], p)) % p)
+                b.append((pow(h, r_v, p)*pow((y*v)%p, d[v], p)) % p)
+
+            else:
+                a.append(pow(g, w[i], p))
+                b.append(pow(h, w[i], p))
+
+        commit0 = (x, y, a, b)
+
         # done with the first part
 
         # This represents getting the random value from the verifier.
@@ -319,12 +356,25 @@ class Voter(Pedersen):
         # the malicious verifier.
         c = beacon(self.voter_id, commit0, q)
 
-        d2 = (c - d1) % q
-        r2 = (w - alpha*d2) % q
-        if self.vote:
-            commit1 = (d1, d2, r1, r2)
-        else:
-            commit1 = (d2, d1, r2, r1)
+        #d2 = (c - d1) % q
+        #r2 = (w - alpha*d2) % q
+        #if self.vote:
+        #    commit1 = (d1, d2, r1, r2)
+        #else:
+        #    commit1 = (d2, d1, r2, r1)
+
+        # skip is the index we will skip and choose c for. Probably doesn't have to be random,
+        # but it can't hurt...
+        skip = randint(o - 1)
+        if skip >= self.vote[o]:
+            skip += 1
+
+        d_sum = sum(d) - d[skip]
+        d[skip] = (c - d_sum) % q
+
+        r = [(w[i] - alpha*d[i]) % q if i != v else r_v for i in range(o)]
+        
+        commit2 = (d, r)
 
         commit = commit0 + commit1
 
